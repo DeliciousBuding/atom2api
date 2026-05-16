@@ -154,12 +154,13 @@ func main() {
 func buildFrontendHandler() http.Handler {
 	distFS, _ := fs.Sub(frontendFS, "frontend/dist")
 	indexHTML, _ := fs.ReadFile(distFS, "index.html")
-	fileServer := http.FileServer(http.FS(distFS))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/admin/")
-		if path == "" {
-			path = "index.html"
+		if path == "" || path == "/" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write(indexHTML)
+			return
 		}
 		f, err := distFS.Open(path)
 		if err != nil {
@@ -168,7 +169,7 @@ func buildFrontendHandler() http.Handler {
 			return
 		}
 		f.Close()
-		fileServer.ServeHTTP(w, r)
+		http.StripPrefix("/admin/", http.FileServer(http.FS(distFS))).ServeHTTP(w, r)
 	})
 }
 
