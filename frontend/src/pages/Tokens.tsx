@@ -14,11 +14,11 @@ export default function Tokens() {
   const load = () => api.tokens().then(setTokens).catch(() => {})
   useEffect(() => { load() }, [])
 
-  const handleImport = async () => {
+  const handleImportEnv = async () => {
     setMsg('')
     try {
-      const res = await api.importAtomCode()
-      setMsg(res.error ? `Error: ${res.error}` : `Imported ${res.imported} token(s)`)
+      const res = await api.importEnv()
+      setMsg(res.error ? `Error: ${res.error}` : res.imported > 0 ? `Imported ${res.imported} token(s) from ATOMCODE_TOKENS` : 'No new tokens found in ATOMCODE_TOKENS env')
       load()
     } catch { setMsg('Import failed') }
   }
@@ -58,8 +58,8 @@ export default function Tokens() {
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold">Tokens</h1>
         <div className="flex gap-2">
-          <button onClick={handleImport} className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
-            <Download size={14} /> Import from AtomCode
+          <button onClick={handleImportEnv} className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700">
+            <Download size={14} /> Import from Env
           </button>
           <button onClick={() => setShowAdd(!showAdd)} className="flex items-center gap-1 px-3 py-1.5 bg-gray-900 text-white rounded text-sm hover:bg-gray-800">
             <Plus size={14} /> Add Token
@@ -94,7 +94,7 @@ export default function Tokens() {
           </thead>
           <tbody>
             {tokens.length === 0 ? (
-              <tr><td colSpan={6} className="text-center py-8 text-gray-400">No tokens. Import from AtomCode or add manually.</td></tr>
+              <tr><td colSpan={6} className="text-center py-8 text-gray-400">No tokens. Add manually or set ATOMCODE_TOKENS env and click Import.</td></tr>
             ) : tokens.map(t => (
               <tr key={t.id} className="border-t">
                 <td className="px-4 py-2">{t.id}</td>

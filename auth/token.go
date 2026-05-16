@@ -8,32 +8,14 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
-	"sync"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/atom2api/atom2api/database"
-	toml "github.com/pelletier/go-toml/v2"
 )
 
-type AtomCodeAuth struct {
-	AccessToken  string `toml:"access_token"`
-	RefreshToken string `toml:"refresh_token"`
-	TokenType    string `toml:"token_type"`
-	ExpiresIn    int    `toml:"expires_in"`
-	CreatedAt    int64  `toml:"created_at"`
-	User         struct {
-		ID        string `toml:"id"`
-		Username  string `toml:"username"`
-		Name      string `toml:"name"`
-		Email     string `toml:"email"`
-		AvatarURL string `toml:"avatar_url"`
-	} `toml:"user"`
-}
-
 type TokenPool struct {
-	mu      sync.RWMutex
 	counter atomic.Int64
 	db      *database.DB
 }
@@ -56,45 +38,37 @@ func (p *TokenPool) Select() (*database.Token, error) {
 	return &t, nil
 }
 
-func ParseAtomCodeAuthDir(dir string) ([]AtomCodeAuth, error) {
-	authFile := filepath.Join(dir, "auth.toml")
-	data, err := os.ReadFile(authFile)
-	if err != nil {
-		return nil, fmt.Errorf("read auth.toml: %w", err)
-	}
-	var auth AtomCodeAuth
-	if err := toml.Unmarshal(data, &auth); err != nil {
-		return nil, fmt.Errorf("parse auth.toml: %w", err)
-	}
-	if auth.AccessToken == "" {
-		return nil, fmt.Errorf("no access_token found in auth.toml")
-	}
-	return []AtomCodeAuth{auth}, nil
-}
-
-func ImportFromAtomCode(db *database.DB, dir string) (int, error) {
-	auths, err := ParseAtomCodeAuthDir(dir)
-	if err != nil {
-		return 0, err
+// ImportFromEnv imports tokens from ATOMCODE_TOKENS env var.
+// Format: "access_token1:refresh_token1,access_token2:refresh_token2"
+// Or just: "access_token1,access_token2" (no refresh tokens)
+func ImportFromEnv(db *database.DB) (int, error) {
+	raw := os.Getenv("ATOMCODE_TOKENS")
+	if raw == "" {
+		return 0, nil
 	}
 	imported := 0
-	for _, a := range auths {
-		exists, err := db.TokenExists(a.AccessToken)
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		parts := strings.SplitN(entry, ":", 2)
+		accessToken := strings.TrimSpace(parts[0])
+		refreshToken := ""
+		if len(parts) == 2 {
+			refreshToken = strings.TrimSpace(parts[1])
+		}
+		if accessToken == "" {
+			continue
+		}
+		exists, err := db.TokenExists(accessToken)
 		if err != nil {
 			return imported, err
 		}
 		if exists {
 			continue
 		}
-		label := a.User.Username
-		if label == "" {
-			label = a.User.Email
-		}
-		userInfo, _ := json.Marshal(map[string]string{
-			"username": a.User.Username,
-			"email":    a.User.Email,
-		})
-		_, err = db.InsertToken(label, a.AccessToken, a.RefreshToken, string(userInfo))
+		_, err = db.InsertToken("env-import", accessToken, refreshToken, "{}")
 		if err != nil {
 			return imported, err
 		}

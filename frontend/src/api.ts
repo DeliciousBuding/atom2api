@@ -29,7 +29,7 @@ export const api = {
   tokens: () => request('/tokens'),
   addToken: (data: { label: string; access_token: string; refresh_token?: string }) =>
     request('/tokens', { method: 'POST', body: JSON.stringify(data) }),
-  importAtomCode: () => request('/tokens/import-atomcode', { method: 'POST' }),
+  importEnv: () => request('/tokens/import-env', { method: 'POST' }),
   refreshToken: (id: number) => request(`/tokens/${id}/refresh`, { method: 'POST' }),
   deleteToken: (id: number) => request(`/tokens/${id}`, { method: 'DELETE' }),
 

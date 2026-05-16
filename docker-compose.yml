@@ -2,12 +2,14 @@ services:
   atom2api:
     build: .
     ports:
-      - "8080:8080"
+      - "${BIND_ADDR:-0.0.0.0}:${PORT:-8080}:8080"
     volumes:
-      - ./data:/app/data
-      - ${HOME}/.atomcode:/root/.atomcode:ro
+      - sqlite-data:/data
+    env_file:
+      - .env
     environment:
-      - PORT=8080
-      - DB_PATH=/app/data/atom2api.db
-      - ADMIN_SECRET=${ADMIN_SECRET:-}
+      - DB_PATH=/data/atom2api.db
     restart: unless-stopped
+
+volumes:
+  sqlite-data:

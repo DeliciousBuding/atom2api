@@ -22,6 +22,52 @@ func NewHandler(db *database.DB, pool *auth.TokenPool, cfg *config.Config) *Hand
 	return &Handler{db: db, pool: pool, cfg: cfg}
 }
 
+// BootstrapStatus returns whether admin secret needs to be set up.
+func (h *Handler) HandleBootstrapStatus(w http.ResponseWriter, r *http.Request) {
+	source := "empty"
+	needsBootstrap := true
+	if h.cfg.AdminSecret != "" {
+		source = "env"
+		needsBootstrap = false
+	} else {
+		dbSecret, _ := h.db.GetSetting("admin_secret")
+		if dbSecret != "" {
+			source = "database"
+			needsBootstrap = false
+		}
+	}
+	writeJSON(w, 200, map[string]any{
+		"needs_bootstrap": needsBootstrap,
+		"source":          source,
+	})
+}
+
+// POST /api/admin/bootstrap — first-run admin secret setup (no auth required)
+func (h *Handler) HandleBootstrap(w http.ResponseWriter, r *http.Request) {
+	if h.cfg.AdminSecret != "" {
+		writeJSON(w, 409, map[string]string{"error": "admin secret already set via environment variable"})
+		return
+	}
+	dbSecret, _ := h.db.GetSetting("admin_secret")
+	if dbSecret != "" {
+		writeJSON(w, 409, map[string]string{"error": "admin secret already configured"})
+		return
+	}
+	var req struct {
+		AdminSecret string `json:"admin_secret"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.AdminSecret) < 4 {
+		writeJSON(w, 400, map[string]string{"error": "admin_secret must be at least 4 characters"})
+		return
+	}
+	if err := h.db.SetSetting("admin_secret", req.AdminSecret); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	h.cfg.AdminSecret = req.AdminSecret
+	writeJSON(w, 200, map[string]string{"status": "ok"})
+}
+
 // POST /api/admin/auth/login
 func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -97,10 +143,9 @@ func (h *Handler) HandleAddToken(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]any{"id": id, "status": "active"})
 }
 
-// POST /api/admin/tokens/import-atomcode
-func (h *Handler) HandleImportAtomCode(w http.ResponseWriter, r *http.Request) {
-	dir := h.cfg.AtomCodeConfDir
-	imported, err := auth.ImportFromAtomCode(h.db, dir)
+// POST /api/admin/tokens/import-env
+func (h *Handler) HandleImportFromEnv(w http.ResponseWriter, r *http.Request) {
+	imported, err := auth.ImportFromEnv(h.db)
 	if err != nil {
 		writeJSON(w, 500, map[string]any{"error": err.Error(), "imported": imported})
 		return
