@@ -97,15 +97,17 @@ func main() {
 	adminMux.HandleFunc("PUT /api/admin/settings", adminHandler.HandleUpdateSettings)
 
 	mux.Handle("/api/admin/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Bootstrap endpoints are always open
 		if r.URL.Path == "/api/admin/bootstrap-status" || r.URL.Path == "/api/admin/bootstrap" {
-			return // already handled above
+			return
 		}
-		// Dynamic check: if admin_secret not set, return 503
 		if cfg.AdminSecret == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(503)
 			w.Write([]byte(`{"error":"not_bootstrapped","message":"Visit /admin/ to set up admin secret first"}`))
+			return
+		}
+		if r.URL.Path == "/api/admin/auth/login" {
+			adminMux.ServeHTTP(w, r)
 			return
 		}
 		middleware.AdminAuth(cfg.AdminSecret, adminMux).ServeHTTP(w, r)
