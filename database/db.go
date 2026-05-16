@@ -96,7 +96,7 @@ func (db *DB) ListTokens() ([]Token, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Token
+	out := []Token{}
 	for rows.Next() {
 		t, err := scanToken(rows)
 		if err != nil {
@@ -113,7 +113,7 @@ func (db *DB) GetActiveTokens() ([]Token, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Token
+	out := []Token{}
 	for rows.Next() {
 		t, err := scanToken(rows)
 		if err != nil {
@@ -180,7 +180,7 @@ func (db *DB) ListAPIKeys() ([]APIKey, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []APIKey
+	out := []APIKey{}
 	for rows.Next() {
 		k, err := scanAPIKey(rows)
 		if err != nil {
@@ -254,7 +254,7 @@ func (db *DB) ListUsageLogs(limit, offset int, model string) ([]UsageLog, int, e
 		return nil, 0, err
 	}
 	defer rows.Close()
-	var out []UsageLog
+	out := []UsageLog{}
 	for rows.Next() {
 		l, err := scanUsageLog(rows)
 		if err != nil {
