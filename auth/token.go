@@ -17,19 +17,18 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 )
 
-type TokenData struct {
+type AtomCodeAuth struct {
 	AccessToken  string `toml:"access_token"`
 	RefreshToken string `toml:"refresh_token"`
 	TokenType    string `toml:"token_type"`
 	ExpiresIn    int    `toml:"expires_in"`
 	CreatedAt    int64  `toml:"created_at"`
-}
-
-type AtomCodeAuth struct {
-	Token *TokenData `toml:"token"`
-	User  struct {
-		Username string `toml:"username"`
-		Email    string `toml:"email"`
+	User         struct {
+		ID        string `toml:"id"`
+		Username  string `toml:"username"`
+		Name      string `toml:"name"`
+		Email     string `toml:"email"`
+		AvatarURL string `toml:"avatar_url"`
 	} `toml:"user"`
 }
 
@@ -67,7 +66,7 @@ func ParseAtomCodeAuthDir(dir string) ([]AtomCodeAuth, error) {
 	if err := toml.Unmarshal(data, &auth); err != nil {
 		return nil, fmt.Errorf("parse auth.toml: %w", err)
 	}
-	if auth.Token == nil || auth.Token.AccessToken == "" {
+	if auth.AccessToken == "" {
 		return nil, fmt.Errorf("no access_token found in auth.toml")
 	}
 	return []AtomCodeAuth{auth}, nil
@@ -80,7 +79,7 @@ func ImportFromAtomCode(db *database.DB, dir string) (int, error) {
 	}
 	imported := 0
 	for _, a := range auths {
-		exists, err := db.TokenExists(a.Token.AccessToken)
+		exists, err := db.TokenExists(a.AccessToken)
 		if err != nil {
 			return imported, err
 		}
@@ -95,7 +94,7 @@ func ImportFromAtomCode(db *database.DB, dir string) (int, error) {
 			"username": a.User.Username,
 			"email":    a.User.Email,
 		})
-		_, err = db.InsertToken(label, a.Token.AccessToken, a.Token.RefreshToken, string(userInfo))
+		_, err = db.InsertToken(label, a.AccessToken, a.RefreshToken, string(userInfo))
 		if err != nil {
 			return imported, err
 		}
