@@ -1,0 +1,23 @@
+# Binaries
+atom2api
+atom2api.exe
+
+# Data
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Frontend build (embedded in binary)
+frontend/dist/
+frontend/node_modules/
+
+# Go
+vendor/
+
+# Env
+.env
+
+# OS
+.DS_Store
+Thumbs.db
