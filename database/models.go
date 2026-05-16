@@ -12,8 +12,13 @@ type Token struct {
 	RefreshToken    string     `json:"refresh_token,omitempty"`
 	UserInfo        string     `json:"user_info"`
 	Status          string     `json:"status"`
+	Enabled         bool       `json:"enabled"`
+	QuotaInfo       string     `json:"quota_info"`
 	LastUsedAt      *time.Time `json:"last_used_at"`
 	LastRefreshedAt *time.Time `json:"last_refreshed_at"`
+	LastTestedAt    *time.Time `json:"last_tested_at"`
+	LastQuotaAt     *time.Time `json:"last_quota_at"`
+	TestLatencyMs   int        `json:"test_latency_ms"`
 	ErrorMessage    string     `json:"error_message"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
@@ -48,17 +53,26 @@ type UsageLog struct {
 
 func scanToken(row interface{ Scan(dest ...any) error }) (*Token, error) {
 	var t Token
-	var usedAt, refreshedAt sql.NullTime
+	var usedAt, refreshedAt, testedAt, quotaAt sql.NullTime
+	var enabled int
 	err := row.Scan(&t.ID, &t.Label, &t.AccessToken, &t.RefreshToken, &t.UserInfo,
-		&t.Status, &usedAt, &refreshedAt, &t.ErrorMessage, &t.CreatedAt, &t.UpdatedAt)
+		&t.Status, &enabled, &t.QuotaInfo, &usedAt, &refreshedAt, &testedAt, &quotaAt,
+		&t.TestLatencyMs, &t.ErrorMessage, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
+	t.Enabled = enabled == 1
 	if usedAt.Valid {
 		t.LastUsedAt = &usedAt.Time
 	}
 	if refreshedAt.Valid {
 		t.LastRefreshedAt = &refreshedAt.Time
+	}
+	if testedAt.Valid {
+		t.LastTestedAt = &testedAt.Time
+	}
+	if quotaAt.Valid {
+		t.LastQuotaAt = &quotaAt.Time
 	}
 	return &t, nil
 }

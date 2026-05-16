@@ -30,7 +30,13 @@ export const api = {
   addToken: (data: { label: string; access_token: string; refresh_token?: string }) =>
     request('/tokens', { method: 'POST', body: JSON.stringify(data) }),
   importEnv: () => request('/tokens/import-env', { method: 'POST' }),
+  importTOML: (toml: string) => request('/tokens/import-toml', { method: 'POST', body: JSON.stringify({ toml }) }),
   refreshToken: (id: number) => request(`/tokens/${id}/refresh`, { method: 'POST' }),
+  testToken: (id: number) => request(`/tokens/${id}/test`, { method: 'POST' }),
+  fetchQuota: (id: number) => request(`/tokens/${id}/quota`, { method: 'POST' }),
+  toggleTokenEnabled: (id: number, enabled: boolean) =>
+    request(`/tokens/${id}/enable`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+  batchTestTokens: () => request('/tokens/batch-test', { method: 'POST' }),
   deleteToken: (id: number) => request(`/tokens/${id}`, { method: 'DELETE' }),
 
   apiKeys: () => request('/apikeys'),

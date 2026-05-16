@@ -40,8 +40,13 @@ CREATE TABLE IF NOT EXISTS tokens (
     refresh_token   TEXT DEFAULT '',
     user_info       TEXT DEFAULT '{}',
     status          TEXT DEFAULT 'active',
+    enabled         INTEGER DEFAULT 1,
+    quota_info      TEXT DEFAULT '{}',
     last_used_at    TIMESTAMP NULL,
     last_refreshed_at TIMESTAMP NULL,
+    last_tested_at  TIMESTAMP NULL,
+    last_quota_at   TIMESTAMP NULL,
+    test_latency_ms INTEGER DEFAULT 0,
     error_message   TEXT DEFAULT '',
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -85,13 +90,25 @@ INSERT OR IGNORE INTO settings (key, value) VALUES
     ('rate_limit_rpm', '0'),
     ('auto_refresh_tokens', 'true');
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	for _, alter := range []string{
+		`ALTER TABLE tokens ADD COLUMN enabled INTEGER DEFAULT 1`,
+		`ALTER TABLE tokens ADD COLUMN quota_info TEXT DEFAULT '{}'`,
+		`ALTER TABLE tokens ADD COLUMN last_tested_at TIMESTAMP NULL`,
+		`ALTER TABLE tokens ADD COLUMN last_quota_at TIMESTAMP NULL`,
+		`ALTER TABLE tokens ADD COLUMN test_latency_ms INTEGER DEFAULT 0`,
+	} {
+		_, _ = db.Exec(alter)
+	}
+	return nil
 }
 
 // --- Token CRUD ---
 
 func (db *DB) ListTokens() ([]Token, error) {
-	rows, err := db.Query(`SELECT id,label,access_token,refresh_token,user_info,status,last_used_at,last_refreshed_at,error_message,created_at,updated_at FROM tokens ORDER BY id`)
+	rows, err := db.Query(`SELECT id,label,access_token,refresh_token,user_info,status,enabled,quota_info,last_used_at,last_refreshed_at,last_tested_at,last_quota_at,test_latency_ms,error_message,created_at,updated_at FROM tokens ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +125,7 @@ func (db *DB) ListTokens() ([]Token, error) {
 }
 
 func (db *DB) GetActiveTokens() ([]Token, error) {
-	rows, err := db.Query(`SELECT id,label,access_token,refresh_token,user_info,status,last_used_at,last_refreshed_at,error_message,created_at,updated_at FROM tokens WHERE status='active' ORDER BY id`)
+	rows, err := db.Query(`SELECT id,label,access_token,refresh_token,user_info,status,enabled,quota_info,last_used_at,last_refreshed_at,last_tested_at,last_quota_at,test_latency_ms,error_message,created_at,updated_at FROM tokens WHERE status='active' AND enabled=1 ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +168,34 @@ func (db *DB) TouchToken(id int64) error {
 func (db *DB) DeleteToken(id int64) error {
 	_, err := db.Exec(`DELETE FROM tokens WHERE id=?`, id)
 	return err
+}
+
+func (db *DB) SetTokenEnabled(id int64, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := db.Exec(`UPDATE tokens SET enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, v, id)
+	return err
+}
+
+func (db *DB) RecordTokenTest(id int64, latencyMs int, ok bool, errMsg string) error {
+	status := "active"
+	if !ok {
+		status = "error"
+	}
+	_, err := db.Exec(`UPDATE tokens SET status=?, error_message=?, last_tested_at=CURRENT_TIMESTAMP, test_latency_ms=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`, status, errMsg, latencyMs, id)
+	return err
+}
+
+func (db *DB) UpdateTokenQuota(id int64, quotaJSON string) error {
+	_, err := db.Exec(`UPDATE tokens SET quota_info=?, last_quota_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`, quotaJSON, id)
+	return err
+}
+
+func (db *DB) GetToken(id int64) (*Token, error) {
+	row := db.QueryRow(`SELECT id,label,access_token,refresh_token,user_info,status,enabled,quota_info,last_used_at,last_refreshed_at,last_tested_at,last_quota_at,test_latency_ms,error_message,created_at,updated_at FROM tokens WHERE id=?`, id)
+	return scanToken(row)
 }
 
 func (db *DB) TokenExists(accessToken string) (bool, error) {

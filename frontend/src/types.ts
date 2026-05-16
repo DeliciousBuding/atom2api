@@ -5,8 +5,13 @@ export interface Token {
   refresh_token?: string
   user_info: string
   status: string
+  enabled: boolean
+  quota_info: string
   last_used_at: string | null
   last_refreshed_at: string | null
+  last_tested_at: string | null
+  last_quota_at: string | null
+  test_latency_ms: number
   error_message: string
   created_at: string
   updated_at: string

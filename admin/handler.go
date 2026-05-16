@@ -1,10 +1,14 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/atom2api/atom2api/auth"
@@ -151,6 +155,172 @@ func (h *Handler) HandleImportFromEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"imported": imported})
+}
+
+// POST /api/admin/tokens/import-toml — paste auth.toml content (one or more, separated by blank lines or ---)
+func (h *Handler) HandleImportTOML(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TOML string `json:"toml"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	imported, errs := auth.ImportFromTOML(h.db, req.TOML)
+	resp := map[string]any{"imported": imported}
+	if len(errs) > 0 {
+		resp["errors"] = errs
+	}
+	writeJSON(w, 200, resp)
+}
+
+// PATCH /api/admin/tokens/{id}/enable — body {"enabled": bool}
+func (h *Handler) HandleToggleTokenEnabled(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, map[string]string{"error": "invalid request"})
+		return
+	}
+	if err := h.db.SetTokenEnabled(id, req.Enabled); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"id": id, "enabled": req.Enabled})
+}
+
+// POST /api/admin/tokens/{id}/test — probe upstream with this token
+func (h *Handler) HandleTestToken(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	tok, err := h.db.GetToken(id)
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "token not found"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	latency, err := probeToken(ctx, tok.AccessToken, h.cfg.UpstreamURL)
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	_ = h.db.RecordTokenTest(tok.ID, int(latency.Milliseconds()), err == nil, errMsg)
+	writeJSON(w, 200, map[string]any{
+		"id":         tok.ID,
+		"ok":         err == nil,
+		"latency_ms": latency.Milliseconds(),
+		"error":      errMsg,
+	})
+}
+
+// POST /api/admin/tokens/batch-test — test all tokens concurrently
+func (h *Handler) HandleBatchTestTokens(w http.ResponseWriter, r *http.Request) {
+	tokens, err := h.db.ListTokens()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	type result struct {
+		ID        int64  `json:"id"`
+		OK        bool   `json:"ok"`
+		LatencyMs int64  `json:"latency_ms"`
+		Error     string `json:"error,omitempty"`
+	}
+	results := make([]result, len(tokens))
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	sem := make(chan struct{}, 5)
+	done := make(chan int, len(tokens))
+	for i, tok := range tokens {
+		sem <- struct{}{}
+		go func(idx int, t database.Token) {
+			defer func() { <-sem; done <- 1 }()
+			lat, perr := probeToken(ctx, t.AccessToken, h.cfg.UpstreamURL)
+			errStr := ""
+			if perr != nil {
+				errStr = perr.Error()
+			}
+			_ = h.db.RecordTokenTest(t.ID, int(lat.Milliseconds()), perr == nil, errStr)
+			results[idx] = result{ID: t.ID, OK: perr == nil, LatencyMs: lat.Milliseconds(), Error: errStr}
+		}(i, tok)
+	}
+	for range tokens {
+		<-done
+	}
+	writeJSON(w, 200, map[string]any{"results": results, "total": len(tokens)})
+}
+
+// POST /api/admin/tokens/{id}/quota — fetch CodingPlan status for this token
+func (h *Handler) HandleTokenQuota(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	tok, err := h.db.GetToken(id)
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "token not found"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	quotaJSON, err := fetchQuota(ctx, tok.AccessToken, h.cfg.UpstreamStatus)
+	if err != nil {
+		writeJSON(w, 502, map[string]string{"error": err.Error()})
+		return
+	}
+	_ = h.db.UpdateTokenQuota(tok.ID, quotaJSON)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write([]byte(quotaJSON))
+}
+
+func probeToken(ctx context.Context, accessToken, upstreamURL string) (time.Duration, error) {
+	body := []byte(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"max_tokens":1,"stream":false}`)
+	req, err := http.NewRequestWithContext(ctx, "POST", upstreamURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", "atomcode/4.22.0")
+	start := time.Now()
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	latency := time.Since(start)
+	if err != nil {
+		return latency, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		buf, _ := io.ReadAll(resp.Body)
+		msg := strings.TrimSpace(string(buf))
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		return latency, fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+	}
+	io.Copy(io.Discard, resp.Body)
+	return latency, nil
+}
+
+func fetchQuota(ctx context.Context, accessToken, statusURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", statusURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("User-Agent", "atomcode/4.22.0")
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	buf, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(buf))
+	}
+	return string(buf), nil
 }
 
 // POST /api/admin/tokens/{id}/refresh

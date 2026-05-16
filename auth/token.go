@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -75,6 +76,89 @@ func ImportFromEnv(db *database.DB) (int, error) {
 		imported++
 	}
 	return imported, nil
+}
+
+var (
+	tomlAccessTokenRE  = regexp.MustCompile(`(?m)^\s*access_token\s*=\s*"([^"]+)"`)
+	tomlRefreshTokenRE = regexp.MustCompile(`(?m)^\s*refresh_token\s*=\s*"([^"]+)"`)
+	tomlUsernameRE     = regexp.MustCompile(`(?m)^\s*username\s*=\s*"([^"]+)"`)
+	tomlEmailRE        = regexp.MustCompile(`(?m)^\s*email\s*=\s*"([^"]+)"`)
+)
+
+// ImportFromTOML parses one or more auth.toml blocks (separated by blank lines or "---")
+// and inserts each as a token row. Returns count imported and per-block errors.
+func ImportFromTOML(db *database.DB, raw string) (int, []string) {
+	blocks := splitTOMLBlocks(raw)
+	imported := 0
+	errs := []string{}
+	for i, block := range blocks {
+		atMatch := tomlAccessTokenRE.FindStringSubmatch(block)
+		if len(atMatch) < 2 {
+			errs = append(errs, fmt.Sprintf("block %d: no access_token found", i+1))
+			continue
+		}
+		accessToken := atMatch[1]
+		refreshToken := ""
+		if m := tomlRefreshTokenRE.FindStringSubmatch(block); len(m) >= 2 {
+			refreshToken = m[1]
+		}
+		label := ""
+		if m := tomlUsernameRE.FindStringSubmatch(block); len(m) >= 2 {
+			label = m[1]
+		}
+		userInfo := map[string]string{}
+		if label != "" {
+			userInfo["username"] = label
+		}
+		if m := tomlEmailRE.FindStringSubmatch(block); len(m) >= 2 {
+			userInfo["email"] = m[1]
+			if label == "" {
+				label = m[1]
+			}
+		}
+		exists, err := db.TokenExists(accessToken)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("block %d: %v", i+1, err))
+			continue
+		}
+		if exists {
+			errs = append(errs, fmt.Sprintf("block %d: duplicate access_token", i+1))
+			continue
+		}
+		uiJSON, _ := json.Marshal(userInfo)
+		if _, err := db.InsertToken(label, accessToken, refreshToken, string(uiJSON)); err != nil {
+			errs = append(errs, fmt.Sprintf("block %d: insert failed: %v", i+1, err))
+			continue
+		}
+		imported++
+	}
+	return imported, errs
+}
+
+func splitTOMLBlocks(raw string) []string {
+	if strings.Contains(raw, "---") {
+		out := []string{}
+		for _, b := range strings.Split(raw, "---") {
+			b = strings.TrimSpace(b)
+			if b != "" {
+				out = append(out, b)
+			}
+		}
+		return out
+	}
+	if strings.Contains(raw, "\n\n") {
+		out := []string{}
+		for _, b := range strings.Split(raw, "\n\n") {
+			b = strings.TrimSpace(b)
+			if b != "" && tomlAccessTokenRE.MatchString(b) {
+				out = append(out, b)
+			}
+		}
+		if len(out) > 1 {
+			return out
+		}
+	}
+	return []string{raw}
 }
 
 func RefreshOneToken(ctx context.Context, db *database.DB, tokenID int64) error {
